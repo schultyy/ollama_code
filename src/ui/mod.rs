@@ -2,11 +2,13 @@ use color_eyre::Result;
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
-    layout::{Constraint, Layout, Position},
+    layout::{Alignment, Constraint, Layout, Position},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
 };
+
+use crate::ollama::OllamaClient;
 
 /// App holds the state of the application
 pub struct App {
@@ -18,6 +20,8 @@ pub struct App {
     input_mode: InputMode,
     /// History of recorded messages
     messages: Vec<String>,
+    is_busy: bool,
+    ollama_client: Option<OllamaClient>,
 }
 
 enum InputMode {
@@ -32,23 +36,25 @@ impl App {
             input_mode: InputMode::Normal,
             messages: Vec::new(),
             character_index: 0,
+            is_busy: false,
+            ollama_client: None,
         }
     }
 
-    fn move_cursor_left(&mut self) {
+    async fn move_cursor_left(&mut self) {
         let cursor_moved_left = self.character_index.saturating_sub(1);
         self.character_index = self.clamp_cursor(cursor_moved_left);
     }
 
-    fn move_cursor_right(&mut self) {
+    async fn move_cursor_right(&mut self) {
         let cursor_moved_right = self.character_index.saturating_add(1);
         self.character_index = self.clamp_cursor(cursor_moved_right);
     }
 
-    fn enter_char(&mut self, new_char: char) {
+    async fn enter_char(&mut self, new_char: char) {
         let index = self.byte_index();
         self.input.insert(index, new_char);
-        self.move_cursor_right();
+        self.move_cursor_right().await;
     }
 
     /// Returns the byte index based on the character position.
@@ -63,7 +69,7 @@ impl App {
             .unwrap_or(self.input.len())
     }
 
-    fn delete_char(&mut self) {
+    async fn delete_char(&mut self) {
         let is_not_cursor_leftmost = self.character_index != 0;
         if is_not_cursor_leftmost {
             // Method "remove" is not used on the saved text for deleting the selected char.
@@ -81,7 +87,7 @@ impl App {
             // Put all characters together except the selected one.
             // By leaving the selected one out, it is forgotten and therefore deleted.
             self.input = before_char_to_delete.chain(after_char_to_delete).collect();
-            self.move_cursor_left();
+            self.move_cursor_left().await;
         }
     }
 
@@ -93,20 +99,26 @@ impl App {
         self.character_index = 0;
     }
 
-    fn submit_message(&mut self) {
-        self.messages.push(self.input.clone());
-        self.input.clear();
+    async fn submit_message(&mut self) {
+        self.is_busy = true;
+        let client = OllamaClient::new();
+        let response = client.prompt(&self.input).await;
+        if let Ok(response) = response {
+            self.messages.push(response.response.unwrap_or_default());
+        }
+        self.input = String::new();
         self.reset_cursor();
+        self.is_busy = false;
     }
 
-    pub fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
+    pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         loop {
             terminal.draw(|frame| self.draw(frame))?;
 
             if let Event::Key(key) = event::read()? {
                 match self.input_mode {
                     InputMode::Normal => match key.code {
-                        KeyCode::Char('e') => {
+                        KeyCode::Char('e') if !self.is_busy => {
                             self.input_mode = InputMode::Editing;
                         }
                         KeyCode::Char('q') => {
@@ -114,15 +126,17 @@ impl App {
                         }
                         _ => {}
                     },
-                    InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
-                        KeyCode::Enter => self.submit_message(),
-                        KeyCode::Char(to_insert) => self.enter_char(to_insert),
-                        KeyCode::Backspace => self.delete_char(),
-                        KeyCode::Left => self.move_cursor_left(),
-                        KeyCode::Right => self.move_cursor_right(),
-                        KeyCode::Esc => self.input_mode = InputMode::Normal,
-                        _ => {}
-                    },
+                    InputMode::Editing if key.kind == KeyEventKind::Press && !self.is_busy => {
+                        match key.code {
+                            KeyCode::Enter => self.submit_message().await,
+                            KeyCode::Char(to_insert) => self.enter_char(to_insert).await,
+                            KeyCode::Backspace => self.delete_char().await,
+                            KeyCode::Left => self.move_cursor_left().await,
+                            KeyCode::Right => self.move_cursor_right().await,
+                            KeyCode::Esc => self.input_mode = InputMode::Normal,
+                            _ => {}
+                        }
+                    }
                     InputMode::Editing => {}
                 }
             }
@@ -132,10 +146,12 @@ impl App {
     fn draw(&self, frame: &mut Frame) {
         let vertical = Layout::vertical([
             Constraint::Length(1),
+            Constraint::Length(2),
             Constraint::Length(3),
             Constraint::Min(1),
         ]);
-        let [help_area, input_area, messages_area] = vertical.areas(frame.area());
+        let [help_area, progress_bar_area, input_area, messages_area] =
+            vertical.areas(frame.area());
 
         let (msg, style) = match self.input_mode {
             InputMode::Normal => (
@@ -170,6 +186,24 @@ impl App {
             })
             .block(Block::bordered().title("Input"));
         frame.render_widget(input, input_area);
+
+        if self.is_busy {
+            let text = vec![
+                Span::styled("●", Style::default().fg(Color::Gray)),
+                Span::raw(" Ollama Service: "),
+                Span::styled("Waiting...", Style::default().fg(Color::Gray)),
+            ];
+
+            let check_paragraph = Paragraph::new(Line::from(text))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Percolating..."),
+                )
+                .alignment(Alignment::Left);
+            frame.render_widget(check_paragraph, progress_bar_area);
+        }
+
         match self.input_mode {
             // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
             InputMode::Normal => {}
