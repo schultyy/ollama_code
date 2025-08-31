@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
-use std::{collections::HashMap, fmt::Display};
+use std::fmt::Display;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::SendError;
@@ -67,15 +67,14 @@ pub enum OllamaMessage {
 }
 
 pub async fn check_available(model: &str) -> Result<(), OllamaError> {
-    let mut map = HashMap::new();
-
-    map.insert("model", model);
-    map.insert("prompt", "availability-check");
-
     let client = reqwest::Client::new();
+    let messages: Vec<serde_json::Value> = vec![];
     client
-        .post("http://localhost:11434/api/generate")
-        .json(&map)
+        .post("http://localhost:11434/api/chat")
+        .json(&json!({
+            "model": model,
+            "messages": messages
+        }))
         .send()
         .await?
         .error_for_status()?;
@@ -84,10 +83,15 @@ pub async fn check_available(model: &str) -> Result<(), OllamaError> {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct OllamaResponse {
-    pub response: Option<String>,
+pub struct OllamaChunk {
+    pub content: Option<String>,
     pub thinking: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct OllamaResponse {
     pub done: bool,
+    pub message: OllamaChunk,
 }
 
 pub struct OllamaClient {
@@ -109,12 +113,21 @@ impl OllamaClient {
     pub async fn prompt_stream(&self, prompt: &str) -> Result<(), OllamaError> {
         let client = reqwest::Client::new();
         let response = client
-            .post("http://localhost:11434/api/generate")
+            .post("http://localhost:11434/api/chat")
             .json(&json!({
                 "model": self.model,
                 "prompt": prompt,
+                "messages": [
+                    {
+                      "role": "system",
+                      "content": self.system_prompt
+                    },
+                  {
+                    "role": "user",
+                    "content": prompt
+                  }
+                ],
                 "stream": true,
-                "system": self.system_prompt
             }))
             .send()
             .await?;

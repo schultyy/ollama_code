@@ -55,11 +55,11 @@ async fn repl(args: CliArgs) {
         while let Some(response) = rx.recv().await {
             match response {
                 ollama::OllamaMessage::Chunk(ollama_response) => {
-                    if let Some(thinking) = ollama_response.thinking {
+                    if let Some(thinking) = ollama_response.message.thinking {
                         print!("{}", thinking.italic());
                         use std::io::{self, Write};
                         io::stdout().flush().unwrap();
-                    } else if let Some(response) = ollama_response.response {
+                    } else if let Some(response) = ollama_response.message.content {
                         print!("{}", response);
                         use std::io::{self, Write};
                         io::stdout().flush().unwrap();
