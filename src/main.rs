@@ -1,4 +1,4 @@
-use std::process::exit;
+use std::process::{self, exit};
 
 use cli_prompts::{DisplayPrompt, prompts::Input};
 use color_eyre::Result;
@@ -24,15 +24,27 @@ async fn main() -> Result<()> {
 }
 
 async fn repl() {
+    println!("Let's get started. Press [ESC] to exit.");
     loop {
-        let input_prompt = Input::new("What are you up to?", |s| Ok(s.to_string()))
-            .help_message("Please provide your prompt");
+        let input_prompt = Input::new("Prompt ", |s| Ok(s.to_string()));
 
         let client = OllamaClient::new();
 
-        match client.prompt(&input_prompt.display().unwrap()).await {
-            Ok(response) => {
-                println!("{}", response.response.unwrap_or_default());
+        let prompt_text = input_prompt.display().unwrap_or_else(|_| process::exit(1));
+
+        match client
+            .prompt_stream(&prompt_text, |chunk| {
+                if let Some(response_text) = &chunk.response {
+                    print!("{}", response_text);
+                    use std::io::{self, Write};
+                    io::stdout().flush().unwrap();
+                }
+                Ok(())
+            })
+            .await
+        {
+            Ok(_) => {
+                println!();
             }
             Err(err) => {
                 eprintln!("ERR: {}", err);
