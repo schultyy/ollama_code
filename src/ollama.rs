@@ -1,11 +1,12 @@
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use std::{collections::HashMap, fmt::Display};
-use tokio::sync::mpsc::{error::SendError};
-use futures_util::StreamExt;
+use tokio::io::AsyncBufReadExt;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::error::SendError;
 use tokio_stream::wrappers::LinesStream;
 use tokio_util::io::StreamReader;
-use tokio::io::AsyncBufReadExt;
 
 use reqwest_streams::error::StreamBodyError;
 
@@ -13,7 +14,7 @@ use reqwest_streams::error::StreamBodyError;
 pub enum OllamaError {
     ReqwestError(reqwest::Error),
     StreamError(StreamBodyError),
-    SendError(SendError<Vec<OllamaResponse>>),
+    SendError(SendError<OllamaMessage>),
     JsonError(serde_json::Error),
     IoError(std::io::Error),
 }
@@ -30,8 +31,8 @@ impl From<reqwest::Error> for OllamaError {
     }
 }
 
-impl From<SendError<Vec<OllamaResponse>>> for OllamaError {
-    fn from(value: SendError<Vec<OllamaResponse>>) -> Self {
+impl From<SendError<OllamaMessage>> for OllamaError {
+    fn from(value: SendError<OllamaMessage>) -> Self {
         Self::SendError(value)
     }
 }
@@ -60,6 +61,11 @@ impl Display for OllamaError {
     }
 }
 
+pub enum OllamaMessage {
+    Chunk(OllamaResponse),
+    EOF,
+}
+
 pub async fn check_available() -> Result<(), OllamaError> {
     let mut map = HashMap::new();
 
@@ -79,41 +85,21 @@ pub async fn check_available() -> Result<(), OllamaError> {
 
 #[derive(Deserialize, Debug)]
 pub struct OllamaResponse {
-    pub model: String,
-    pub created_at: String,
     pub response: Option<String>,
     pub thinking: Option<String>,
     pub done: bool,
 }
 
-pub struct OllamaClient {}
+pub struct OllamaClient {
+    tx: Sender<OllamaMessage>,
+}
 
 impl OllamaClient {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(tx: Sender<OllamaMessage>) -> Self {
+        Self { tx }
     }
 
-    pub async fn prompt(&self, prompt: &str) -> Result<OllamaResponse, OllamaError> {
-        let client = reqwest::Client::new();
-        let response = client
-            .post("http://localhost:11434/api/generate")
-            .json(&json!({
-                "model": "gpt-oss",
-                "prompt": prompt,
-                "stream": false
-            }))
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        return Ok(response);
-    }
-
-    pub async fn prompt_stream<F>(&self, prompt: &str, mut on_chunk: F) -> Result<(), OllamaError> 
-    where 
-        F: FnMut(&OllamaResponse) -> Result<(), OllamaError>
-    {
+    pub async fn prompt_stream(&self, prompt: &str) -> Result<(), OllamaError> {
         let client = reqwest::Client::new();
         let response = client
             .post("http://localhost:11434/api/generate")
@@ -126,10 +112,9 @@ impl OllamaClient {
             .await?;
 
         let stream = response.bytes_stream();
-        let stream_reader = StreamReader::new(stream.map(|result| {
-            result.map_err(std::io::Error::other)
-        }));
-        
+        let stream_reader =
+            StreamReader::new(stream.map(|result| result.map_err(std::io::Error::other)));
+
         let buf_reader = tokio::io::BufReader::new(stream_reader);
         let mut lines = LinesStream::new(buf_reader.lines());
 
@@ -138,11 +123,13 @@ impl OllamaClient {
             if line.trim().is_empty() {
                 continue;
             }
-            
+
             let chunk: OllamaResponse = serde_json::from_str(&line)?;
-            on_chunk(&chunk)?;
-            
-            if chunk.done {
+            let is_done = chunk.done;
+            self.tx.send(OllamaMessage::Chunk(chunk)).await?;
+
+            if is_done {
+                self.tx.send(OllamaMessage::EOF).await?;
                 break;
             }
         }
