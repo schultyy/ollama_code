@@ -5,10 +5,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+cli-prompts = "0.1.0"
 color-eyre = "0.6.3"
 crossterm = "0.28.1"
 futures = "0.3.31"
-ratatui = "0.29.0"
 reqwest = { version = "0.12.23", features = ["json"] }
 reqwest-streams = { version = "0.12.0", features = ["json"] }
 serde = { version = "1.0.219", features = ["derive"] }

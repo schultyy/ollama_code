@@ -1,10 +1,9 @@
-use futures::TryStreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use std::{collections::HashMap, fmt::Display};
 use tokio::sync::mpsc::{self, Sender, error::SendError};
 
-use reqwest_streams::{JsonStreamResponse, error::StreamBodyError};
+use reqwest_streams::error::StreamBodyError;
 
 #[derive(Debug)]
 pub enum OllamaError {
@@ -85,7 +84,10 @@ impl OllamaClient {
                 "stream": false
             }))
             .send()
+            .await?
+            .json()
             .await?;
-        Ok(response.json().await?)
+
+        return Ok(response);
     }
 }

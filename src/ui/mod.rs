@@ -7,8 +7,9 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
+use tokio::sync::mpsc::{Receiver, Sender, channel, error::TryRecvError};
 
-use crate::ollama::OllamaClient;
+use crate::ollama::{OllamaClient, OllamaError};
 
 /// App holds the state of the application
 pub struct App {
@@ -22,6 +23,8 @@ pub struct App {
     messages: Vec<String>,
     is_busy: bool,
     ollama_client: Option<OllamaClient>,
+    tx: Sender<Result<String, OllamaError>>,
+    rx: Receiver<Result<String, OllamaError>>,
 }
 
 enum InputMode {
@@ -31,6 +34,7 @@ enum InputMode {
 
 impl App {
     pub fn new() -> Self {
+        let (tx, rx) = channel(100);
         Self {
             input: String::new(),
             input_mode: InputMode::Normal,
@@ -38,6 +42,8 @@ impl App {
             character_index: 0,
             is_busy: false,
             ollama_client: None,
+            tx,
+            rx,
         }
     }
 
@@ -102,17 +108,33 @@ impl App {
     async fn submit_message(&mut self) {
         self.is_busy = true;
         let client = OllamaClient::new();
-        let response = client.prompt(&self.input).await;
-        if let Ok(response) = response {
-            self.messages.push(response.response.unwrap_or_default());
-        }
-        self.input = String::new();
+
+        client.prompt(&self.input, self.tx.clone()).await;
         self.reset_cursor();
-        self.is_busy = false;
     }
 
     pub async fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         loop {
+            match self.rx.try_recv() {
+                Ok(val) => match val {
+                    Ok(val) => {
+                        self.messages.push(val);
+                        self.input = String::new();
+                        self.is_busy = false;
+                    }
+                    Err(err) => {
+                        self.messages.push(format!("ERR: {}", err));
+                        self.input = String::new();
+                        self.is_busy = false;
+                    }
+                },
+                Err(err) => {
+                    if err != TryRecvError::Empty {
+                        panic!("{}", err)
+                    }
+                }
+            }
+
             terminal.draw(|frame| self.draw(frame))?;
 
             if let Event::Key(key) = event::read()? {
@@ -146,7 +168,7 @@ impl App {
     fn draw(&self, frame: &mut Frame) {
         let vertical = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(2),
+            Constraint::Length(1),
             Constraint::Length(3),
             Constraint::Min(1),
         ]);
