@@ -92,11 +92,16 @@ pub struct OllamaResponse {
 
 pub struct OllamaClient {
     tx: Sender<OllamaMessage>,
+    system_prompt: String,
 }
 
 impl OllamaClient {
     pub fn new(tx: Sender<OllamaMessage>) -> Self {
-        Self { tx }
+        let system_prompt = "You are a coding assistant. Provide code and explanation.";
+        Self {
+            tx,
+            system_prompt: system_prompt.into(),
+        }
     }
 
     pub async fn prompt_stream(&self, prompt: &str) -> Result<(), OllamaError> {
@@ -106,7 +111,8 @@ impl OllamaClient {
             .json(&json!({
                 "model": "gpt-oss",
                 "prompt": prompt,
-                "stream": true
+                "stream": true,
+                "system": self.system_prompt
             }))
             .send()
             .await?;
