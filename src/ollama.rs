@@ -1,6 +1,7 @@
 use futures_util::StreamExt;
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fmt::Display;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc::Sender;
@@ -82,22 +83,55 @@ pub async fn check_available(model: &str) -> Result<(), OllamaError> {
     Ok(())
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize, Clone)]
+pub struct Function {
+    pub name: String,
+    pub arguments: HashMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ToolCall {
+    pub function: Function,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub struct OllamaChunk {
     pub content: Option<String>,
     pub thinking: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct OllamaResponse {
     pub done: bool,
     pub message: OllamaChunk,
 }
 
+#[derive(Clone)]
 pub struct OllamaClient {
     tx: Sender<OllamaMessage>,
     system_prompt: String,
     model: String,
+}
+
+#[derive(Serialize)]
+pub enum Role {
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "assistant")]
+    Assistant,
+    #[serde(rename = "tool")]
+    Tool,
+}
+
+impl Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Role::User => write!(f, "user"),
+            Role::Assistant => write!(f, "assistant"),
+            Role::Tool => write!(f, "tool"),
+        }
+    }
 }
 
 impl OllamaClient {
@@ -110,22 +144,71 @@ impl OllamaClient {
         }
     }
 
-    pub async fn prompt_stream(&self, prompt: &str) -> Result<(), OllamaError> {
+    pub async fn tool_prompt(&self, content: &str, tool_name: &str) -> Result<(), OllamaError> {
+        let mut messages = vec![];
+        messages.push(HashMap::from([
+            ("role".into(), Value::String(Role::Tool.to_string())),
+            ("content".into(), Value::String(content.to_string())),
+            ("tool_name".into(), Value::String(tool_name.to_string())),
+        ]));
+
+        self.prompt_stream(messages).await
+    }
+
+    pub async fn user_prompt(&self, prompt: &str) -> Result<(), OllamaError> {
+        let mut messages = vec![];
+        let mut map = HashMap::new();
+        map.insert("role".into(), Value::String("system".into()));
+        map.insert(
+            "content".into(),
+            Value::String(self.system_prompt.to_string()),
+        );
+        messages.push(map);
+
+        messages.push(HashMap::from([
+            ("role".into(), Value::String(Role::User.to_string())),
+            ("content".into(), Value::String(prompt.to_string())),
+        ]));
+
+        self.prompt_stream(messages).await
+    }
+
+    async fn prompt_stream(
+        &self,
+        messages: Vec<HashMap<String, Value>>,
+    ) -> Result<(), OllamaError> {
         let client = reqwest::Client::new();
+
         let response = client
             .post("http://localhost:11434/api/chat")
             .json(&json!({
                 "model": self.model,
-                "prompt": prompt,
-                "messages": [
+                "messages": messages,
+                "tools": [
                     {
-                      "role": "system",
-                      "content": self.system_prompt
+                        "type": "function",
+                        "function": {
+                            "name": "list_directory",
+                            "description": "Get all files and directories from the current directory",
+                        }
                     },
-                  {
-                    "role": "user",
-                    "content": prompt
-                  }
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "description": "Returns the contents of a specific file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "The file path"
+                                    }
+                                },
+                                "required": ["path"]
+                            }
+                        }
+                    },
                 ],
                 "stream": true,
             }))
@@ -147,7 +230,7 @@ impl OllamaClient {
 
             let chunk: OllamaResponse = serde_json::from_str(&line)?;
             let is_done = chunk.done;
-            self.tx.send(OllamaMessage::Chunk(chunk)).await?;
+            self.tx.send(OllamaMessage::Chunk(chunk.clone())).await?;
 
             if is_done {
                 self.tx.send(OllamaMessage::EOF).await?;
