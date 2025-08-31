@@ -66,10 +66,10 @@ pub enum OllamaMessage {
     EOF,
 }
 
-pub async fn check_available() -> Result<(), OllamaError> {
+pub async fn check_available(model: &str) -> Result<(), OllamaError> {
     let mut map = HashMap::new();
 
-    map.insert("model", "gpt-oss");
+    map.insert("model", model);
     map.insert("prompt", "availability-check");
 
     let client = reqwest::Client::new();
@@ -93,14 +93,16 @@ pub struct OllamaResponse {
 pub struct OllamaClient {
     tx: Sender<OllamaMessage>,
     system_prompt: String,
+    model: String,
 }
 
 impl OllamaClient {
-    pub fn new(tx: Sender<OllamaMessage>) -> Self {
+    pub fn new(tx: Sender<OllamaMessage>, model: &str) -> Self {
         let system_prompt = "You are a coding assistant. Provide code and explanation.";
         Self {
             tx,
             system_prompt: system_prompt.into(),
+            model: model.into(),
         }
     }
 
@@ -109,7 +111,7 @@ impl OllamaClient {
         let response = client
             .post("http://localhost:11434/api/generate")
             .json(&json!({
-                "model": "gpt-oss",
+                "model": self.model,
                 "prompt": prompt,
                 "stream": true,
                 "system": self.system_prompt
