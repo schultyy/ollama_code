@@ -1,12 +1,11 @@
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{self, exit},
 };
 
 use clap::Parser;
 use cli_prompts::{DisplayPrompt, prompts::Input};
 use color_eyre::{Result, owo_colors::OwoColorize};
-use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::{Level, event, span};
 
@@ -22,7 +21,7 @@ mod tools;
 #[derive(Parser)]
 struct CliArgs {
     ///Which model to use
-    #[arg(short, long, default_value = "mistral-small3.2:latest")]
+    #[arg(short, long, default_value = "ollama_code")]
     pub model: String,
 
     ///Sets the path to operate in.
@@ -61,6 +60,7 @@ async fn repl(args: CliArgs) {
     let client = OllamaClient::new(tx.clone(), &args.model);
     let mut show_prompt = true;
     let mut call_stack: usize = 0;
+
     loop {
         let root_span = span!(Level::INFO, "repl", call_stack = call_stack);
         let _guard = root_span.enter();
@@ -134,6 +134,9 @@ async fn repl(args: CliArgs) {
                     call_stack -= 1;
                     if call_stack == 0 {
                         show_prompt = true;
+                        use std::io::{self, Write};
+                        io::stdout().flush().unwrap();
+                        // client = OllamaClient::new(tx.clone(), &args.model);
                     }
                     break;
                 }
