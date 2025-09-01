@@ -22,7 +22,7 @@ mod tools;
 #[derive(Parser)]
 struct CliArgs {
     ///Which model to use
-    #[arg(short, long, default_value = "gpt-oss")]
+    #[arg(short, long, default_value = "mistral-small3.2:latest")]
     pub model: String,
 
     ///Sets the path to operate in.
