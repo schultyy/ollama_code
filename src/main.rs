@@ -1,4 +1,7 @@
-use std::process::{self, exit};
+use std::{
+    path::{Path, PathBuf},
+    process::{self, exit},
+};
 
 use clap::Parser;
 use cli_prompts::{DisplayPrompt, prompts::Input};
@@ -146,10 +149,29 @@ fn dispatch_tool(tool: &ToolCall) -> Result<String, String> {
             .function
             .arguments
             .get("path")
-            .unwrap_or(&Value::String(".".into()))
-            .to_string();
-        event!(Level::INFO, path = path);
-        return match list_directory(&path) {
+            .map(|p| PathBuf::from(p.to_string()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let canonical_path = match std::fs::canonicalize(&path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
+                return Err(format!(
+                    "File not found or invalid path: {}",
+                    path.display()
+                ));
+            }
+        };
+        event!(
+            Level::INFO,
+            path = format!(
+                "{}",
+                canonical_path
+                    .as_os_str()
+                    .to_str()
+                    .unwrap_or("invalid utf8 path")
+            )
+        );
+        return match list_directory(&canonical_path) {
             Ok(val) => Ok(val),
             Err(err) => {
                 tracing::error!("ERR: {}", err);
@@ -157,8 +179,32 @@ fn dispatch_tool(tool: &ToolCall) -> Result<String, String> {
             }
         };
     } else if tool.function.name == "read_file" {
-        let path = tool.function.arguments.get("path").unwrap().to_string();
-        event!(Level::INFO, path = path);
+        let path = tool
+            .function
+            .arguments
+            .get("path")
+            .map(|p| PathBuf::from(p.to_string()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        let canonical_path = match std::fs::canonicalize(&path) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
+                return Err(format!(
+                    "File not found or invalid path: {}",
+                    path.display()
+                ));
+            }
+        };
+        event!(
+            Level::INFO,
+            path = format!(
+                "{}",
+                canonical_path
+                    .as_os_str()
+                    .to_str()
+                    .unwrap_or("invalid utf8 path")
+            )
+        );
         return match read_file(&path) {
             Ok(val) => Ok(val),
             Err(err) => {

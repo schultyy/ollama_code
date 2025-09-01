@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use tracing::Level;
 
@@ -7,12 +7,12 @@ use tracing::Level;
 // }
 
 #[tracing::instrument]
-pub fn read_file(path: &str) -> Result<String, std::io::Error> {
+pub fn read_file(path: &PathBuf) -> Result<String, std::io::Error> {
     fs::read_to_string(path)
 }
 
 #[tracing::instrument]
-pub fn list_directory(base_path: &str) -> Result<String, std::io::Error> {
+pub fn list_directory(base_path: &PathBuf) -> Result<String, std::io::Error> {
     let paths = fs::read_dir(base_path)?;
     let mut results = vec![];
 

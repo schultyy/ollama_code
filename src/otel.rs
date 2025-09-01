@@ -3,7 +3,7 @@ use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
 use opentelemetry_otlp::{LogExporter, SpanExporter, WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::logs::{LogProcessor, SdkLoggerProvider};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 use tracing_subscriber::layer::SubscriberExt;
