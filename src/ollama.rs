@@ -8,6 +8,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::SendError;
 use tokio_stream::wrappers::LinesStream;
 use tokio_util::io::StreamReader;
+use tracing::Level;
 
 use reqwest_streams::error::StreamBodyError;
 
@@ -144,6 +145,7 @@ impl OllamaClient {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn tool_prompt(&self, content: &str, tool_name: &str) -> Result<(), OllamaError> {
         let mut messages = vec![];
         messages.push(HashMap::from([
@@ -151,10 +153,12 @@ impl OllamaClient {
             ("content".into(), Value::String(content.to_string())),
             ("tool_name".into(), Value::String(tool_name.to_string())),
         ]));
+        tracing::event!(Level::INFO, content = content, tool_name = tool_name);
 
         self.prompt_stream(messages).await
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn user_prompt(&self, prompt: &str) -> Result<(), OllamaError> {
         let mut messages = vec![];
         let mut map = HashMap::new();
@@ -173,6 +177,7 @@ impl OllamaClient {
         self.prompt_stream(messages).await
     }
 
+    #[tracing::instrument(skip(self))]
     async fn prompt_stream(
         &self,
         messages: Vec<HashMap<String, Value>>,
