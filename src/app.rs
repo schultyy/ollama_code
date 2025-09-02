@@ -1,0 +1,231 @@
+use std::{fmt::Display, path::PathBuf};
+
+use tokio::sync::mpsc::{Receiver, Sender};
+use tracing::{Level, event, span};
+
+use crate::ollama::{self, OllamaClient, OllamaMessage, ToolCall};
+
+pub enum AppError {
+    SendError(tokio::sync::mpsc::error::SendError<StdoutMessage>),
+}
+
+impl From<tokio::sync::mpsc::error::SendError<StdoutMessage>> for AppError {
+    fn from(value: tokio::sync::mpsc::error::SendError<StdoutMessage>) -> Self {
+        Self::SendError(value)
+    }
+}
+
+impl Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppError::SendError(send_error) => write!(f, "{}", send_error),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum StdoutMessage {
+    Italic(String),
+    Inline(String),
+    WithNewLine(String),
+    Error(String),
+}
+
+#[derive(Debug)]
+pub struct App {
+    call_stack: usize,
+    show_prompt: bool,
+    client: OllamaClient,
+    stdout_tx: Sender<StdoutMessage>,
+    rx: Receiver<OllamaMessage>,
+}
+
+impl App {
+    pub fn new(
+        rx: Receiver<OllamaMessage>,
+        stdout_tx: Sender<StdoutMessage>,
+        client: OllamaClient,
+    ) -> Self {
+        Self {
+            call_stack: 0,
+            show_prompt: true,
+            client,
+            stdout_tx: stdout_tx,
+            rx,
+        }
+    }
+
+    pub async fn repl(&mut self, prompt: Option<String>) -> Result<(), AppError> {
+        let root_span = span!(Level::INFO, "repl", call_stack = self.call_stack);
+        let _guard = root_span.enter();
+
+        if self.show_prompt {
+            let user_client = self.client.clone();
+            self.call_stack += 1;
+
+            if prompt.is_none() {
+                panic!("Expected Prompt, Got None");
+            }
+
+            let user_prompt_stdout = self.stdout_tx.clone();
+            tokio::spawn(async move {
+                if let Err(err) = user_client.user_prompt(&prompt.unwrap()).await {
+                    let msg = format!("[ERR] Spawn Prompt Failed.\n[ERR]: {}", err);
+                    if let Err(err) = user_prompt_stdout.send(StdoutMessage::Error(msg)).await {
+                        panic!("[ERR] Failed to send message in user prompt: {}", err);
+                    }
+                }
+            });
+        }
+
+        while let Some(response) = self.rx.recv().await {
+            match response {
+                ollama::OllamaMessage::Chunk(ollama_response) => {
+                    if let Some(tool_calls) = ollama_response.message.tool_calls {
+                        let span = tracing::span!(Level::INFO, "TOOL CALL");
+                        let _entered = span.enter();
+                        for tool in tool_calls.iter() {
+                            self.stdout_tx
+                                .send(StdoutMessage::WithNewLine(format!(
+                                    "\n TOOL CALL {} - {:?}",
+                                    tool.function.name, tool.function.arguments
+                                )))
+                                .await?;
+                            tracing::info!(
+                                "TOOL_CALL: {} ARGUMENTS: {}",
+                                tool.function.name,
+                                tool.function.arguments.len()
+                            );
+                            self.show_prompt = false;
+                            let tool = tool.clone();
+                            let client = self.client.clone();
+                            let result = match self.dispatch_tool(&tool) {
+                                Ok(value) => {
+                                    event!(Level::INFO, tool = tool.function.name, value = value);
+                                    value
+                                }
+                                Err(err) => {
+                                    event!(Level::ERROR, tool = tool.function.name, value = err);
+                                    err
+                                }
+                            };
+
+                            self.call_stack += 1;
+                            tracing::debug!("Increase Call Stack to {}", self.call_stack);
+                            let tool_call_stdout = self.stdout_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) =
+                                    client.tool_prompt(&result, &tool.function.name).await
+                                {
+                                    let msg =
+                                        format!("[ERR] Spawn Tool Prompt Failed\n. [ERR]: {}", err);
+                                    if let Err(err) =
+                                        tool_call_stdout.send(StdoutMessage::Error(msg)).await
+                                    {
+                                        panic!(
+                                            "[ERR] Failed to send message in spawn tool prompt: {}",
+                                            err
+                                        );
+                                    }
+                                }
+                            });
+                        }
+                    } else if let Some(thinking) = ollama_response.message.thinking {
+                        self.stdout_tx.send(StdoutMessage::Italic(thinking)).await?;
+                    } else if let Some(response) = ollama_response.message.content {
+                        self.stdout_tx.send(StdoutMessage::Inline(response)).await?;
+                    }
+                }
+                ollama::OllamaMessage::EOF => {
+                    self.call_stack -= 1;
+                    if self.call_stack == 0 {
+                        self.show_prompt = true;
+                        use std::io::{self, Write};
+                        io::stdout().flush().unwrap();
+                        // client = OllamaClient::new(tx.clone(), &args.model);
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tracing::instrument]
+    fn dispatch_tool(&self, tool: &ToolCall) -> Result<String, String> {
+        if tool.function.name == "list_directory" {
+            let path = tool
+                .function
+                .arguments
+                .get("path")
+                .map(|p| PathBuf::from(p.to_string()))
+                .unwrap_or_else(|| PathBuf::from("."));
+            let canonical_path = match std::fs::canonicalize(&path) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
+                    return Err(format!(
+                        "File not found or invalid path: {}",
+                        path.display()
+                    ));
+                }
+            };
+            event!(
+                Level::INFO,
+                path = format!(
+                    "{}",
+                    canonical_path
+                        .as_os_str()
+                        .to_str()
+                        .unwrap_or("invalid utf8 path")
+                )
+            );
+            return match crate::tools::list_directory(&canonical_path) {
+                Ok(val) => Ok(val),
+                Err(err) => {
+                    tracing::error!("ERR: {}", err);
+                    Err(format!("ERR: {}", err))
+                }
+            };
+        } else if tool.function.name == "read_file" {
+            let path = tool
+                .function
+                .arguments
+                .get("path")
+                .map(|p| PathBuf::from(p.to_string()))
+                .unwrap_or_else(|| PathBuf::from("."));
+            let canonical_path = match std::fs::canonicalize(&path) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
+                    return Err(format!(
+                        "File not found or invalid path: {}",
+                        path.display()
+                    ));
+                }
+            };
+            event!(
+                Level::INFO,
+                path = format!(
+                    "{}",
+                    canonical_path
+                        .as_os_str()
+                        .to_str()
+                        .unwrap_or("invalid utf8 path")
+                )
+            );
+            return match crate::tools::read_file(&path) {
+                Ok(val) => Ok(val),
+                Err(err) => {
+                    tracing::error!("ERR: {}", err);
+                    Err(format!("ERR: {}", err))
+                }
+            };
+        }
+        return Err(format!("ERR: Tool {} not found", tool.function.name));
+    }
+
+    pub fn show_prompt(&self) -> bool {
+        self.show_prompt
+    }
+}

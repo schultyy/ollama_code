@@ -1,19 +1,14 @@
-use std::{
-    path::PathBuf,
-    process::{self, exit},
-};
+use std::process::exit;
 
 use clap::Parser;
 use cli_prompts::{DisplayPrompt, prompts::Input};
 use color_eyre::{Result, owo_colors::OwoColorize};
 use tokio::sync::mpsc;
-use tracing::{Level, event, span};
+use tracing::Level;
 
-use crate::{
-    ollama::{OllamaClient, ToolCall},
-    tools::{list_directory, read_file},
-};
+use crate::{app::App, ollama::OllamaClient};
 
+mod app;
 mod ollama;
 mod otel;
 mod tools;
@@ -56,165 +51,45 @@ async fn main() -> Result<()> {
 
 async fn repl(args: CliArgs) {
     println!("Let's get started. Press [ESC] to exit.");
-    let (tx, mut rx) = mpsc::channel(1000);
-    let client = OllamaClient::new(tx.clone(), &args.model);
-    let mut show_prompt = true;
-    let mut call_stack: usize = 0;
+    let (ollama_tx, ollama_rx) = mpsc::channel(1000);
+    let (stdout_tx, mut stdout_rx) = mpsc::channel(1000);
+    let client = OllamaClient::new(ollama_tx.clone(), &args.model);
+    let mut app = App::new(ollama_rx, stdout_tx.clone(), client);
+
+    tokio::spawn(async move {
+        while let Some(msg) = stdout_rx.recv().await {
+            match msg {
+                app::StdoutMessage::Italic(msg) => {
+                    print!("{}", msg.italic());
+                    use std::io::{self, Write};
+                    io::stdout().flush().unwrap();
+                }
+                app::StdoutMessage::Inline(msg) => {
+                    print!("{}", msg);
+                    use std::io::{self, Write};
+                    io::stdout().flush().unwrap();
+                }
+                app::StdoutMessage::WithNewLine(msg) => {
+                    println!("{}", msg);
+                }
+                app::StdoutMessage::Error(err) => {
+                    eprintln!("{}", err);
+                }
+            }
+        }
+    });
 
     loop {
-        let root_span = span!(Level::INFO, "repl", call_stack = call_stack);
-        let _guard = root_span.enter();
-
-        if show_prompt {
+        let mut prompt_text = None;
+        if app.show_prompt() {
             let input_prompt = Input::new("Prompt ", |s| Ok(s.to_string()));
-            let prompt_text = input_prompt.display().unwrap_or_else(|_| process::exit(1));
-
-            let user_client = client.clone();
-            call_stack += 1;
-            tokio::spawn(async move {
-                if let Err(err) = user_client.user_prompt(&prompt_text).await {
-                    eprintln!("[ERR] Spawn Prompt Failed");
-                    eprintln!("[ERR]: {}", err);
-                }
-            });
+            prompt_text = Some(input_prompt.display().expect("Failed to get input value"));
         }
-
-        while let Some(response) = rx.recv().await {
-            match response {
-                ollama::OllamaMessage::Chunk(ollama_response) => {
-                    if let Some(tool_calls) = ollama_response.message.tool_calls {
-                        let span = tracing::span!(Level::INFO, "TOOL CALL");
-                        let _entered = span.enter();
-                        for tool in tool_calls.iter() {
-                            println!(
-                                "\n TOOL CALL {} - {:?}",
-                                tool.function.name, tool.function.arguments
-                            );
-                            tracing::info!(
-                                "TOOL_CALL: {} ARGUMENTS: {}",
-                                tool.function.name,
-                                tool.function.arguments.len()
-                            );
-                            show_prompt = false;
-                            let tool = tool.clone();
-                            let client = client.clone();
-                            let result = match dispatch_tool(&tool) {
-                                Ok(value) => {
-                                    event!(Level::INFO, tool = tool.function.name, value = value);
-                                    value
-                                }
-                                Err(err) => {
-                                    event!(Level::ERROR, tool = tool.function.name, value = err);
-                                    err
-                                }
-                            };
-
-                            call_stack += 1;
-                            tracing::debug!("Increase Call Stack to {}", call_stack);
-                            tokio::spawn(async move {
-                                if let Err(err) =
-                                    client.tool_prompt(&result, &tool.function.name).await
-                                {
-                                    eprintln!("[ERR] Spawn Tool Prompt Failed");
-                                    eprintln!("[ERR]: {}", err);
-                                }
-                            });
-                        }
-                    } else if let Some(thinking) = ollama_response.message.thinking {
-                        print!("{}", thinking.italic());
-                        use std::io::{self, Write};
-                        io::stdout().flush().unwrap();
-                    } else if let Some(response) = ollama_response.message.content {
-                        print!("{}", response);
-                        use std::io::{self, Write};
-                        io::stdout().flush().unwrap();
-                    }
-                }
-                ollama::OllamaMessage::EOF => {
-                    call_stack -= 1;
-                    if call_stack == 0 {
-                        show_prompt = true;
-                        use std::io::{self, Write};
-                        io::stdout().flush().unwrap();
-                        // client = OllamaClient::new(tx.clone(), &args.model);
-                    }
-                    break;
-                }
+        match app.repl(prompt_text).await {
+            Ok(()) => (),
+            Err(err) => {
+                eprintln!("[ERR]: {}", err);
             }
         }
     }
-}
-
-#[tracing::instrument]
-fn dispatch_tool(tool: &ToolCall) -> Result<String, String> {
-    if tool.function.name == "list_directory" {
-        let path = tool
-            .function
-            .arguments
-            .get("path")
-            .map(|p| PathBuf::from(p.to_string()))
-            .unwrap_or_else(|| PathBuf::from("."));
-        let canonical_path = match std::fs::canonicalize(&path) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
-                return Err(format!(
-                    "File not found or invalid path: {}",
-                    path.display()
-                ));
-            }
-        };
-        event!(
-            Level::INFO,
-            path = format!(
-                "{}",
-                canonical_path
-                    .as_os_str()
-                    .to_str()
-                    .unwrap_or("invalid utf8 path")
-            )
-        );
-        return match list_directory(&canonical_path) {
-            Ok(val) => Ok(val),
-            Err(err) => {
-                tracing::error!("ERR: {}", err);
-                Err(format!("ERR: {}", err))
-            }
-        };
-    } else if tool.function.name == "read_file" {
-        let path = tool
-            .function
-            .arguments
-            .get("path")
-            .map(|p| PathBuf::from(p.to_string()))
-            .unwrap_or_else(|| PathBuf::from("."));
-        let canonical_path = match std::fs::canonicalize(&path) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
-                return Err(format!(
-                    "File not found or invalid path: {}",
-                    path.display()
-                ));
-            }
-        };
-        event!(
-            Level::INFO,
-            path = format!(
-                "{}",
-                canonical_path
-                    .as_os_str()
-                    .to_str()
-                    .unwrap_or("invalid utf8 path")
-            )
-        );
-        return match read_file(&path) {
-            Ok(val) => Ok(val),
-            Err(err) => {
-                tracing::error!("ERR: {}", err);
-                Err(format!("ERR: {}", err))
-            }
-        };
-    }
-    return Err(format!("ERR: Tool {} not found", tool.function.name));
 }

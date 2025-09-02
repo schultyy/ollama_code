@@ -108,7 +108,7 @@ pub struct OllamaResponse {
     pub message: OllamaChunk,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct OllamaClient {
     tx: Sender<OllamaMessage>,
     system_prompt: String,
@@ -119,8 +119,6 @@ pub struct OllamaClient {
 pub enum Role {
     #[serde(rename = "user")]
     User,
-    #[serde(rename = "assistant")]
-    Assistant,
     #[serde(rename = "tool")]
     Tool,
 }
@@ -129,7 +127,6 @@ impl Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Role::User => write!(f, "user"),
-            Role::Assistant => write!(f, "assistant"),
             Role::Tool => write!(f, "tool"),
         }
     }
