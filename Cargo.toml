@@ -20,6 +20,7 @@ tokio-stream = { version = "0.1.17", features = ["io-util"] }
 tokio-util = { version = "0.7.16", features = ["io"] }
 tracing = { version = "0.1", features = ["log", "log-always"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+tracing-error = "0.2"
 tracing-opentelemetry = "0.31.0"
 opentelemetry = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0", features = ["tonic", "grpc-tonic"] }

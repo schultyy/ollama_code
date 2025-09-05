@@ -8,6 +8,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_error::ErrorLayer;
 
 pub fn setup_otlp(
     endpoint: &str,
@@ -51,6 +52,7 @@ pub fn setup_otlp(
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "INFO".into()),
         )
+        .with(ErrorLayer::default())
         .with(layer)
         .with(telemetry)
         .init();

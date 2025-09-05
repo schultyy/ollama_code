@@ -1,4 +1,4 @@
-use std::process::exit;
+use std::process::{self, exit};
 
 use clap::Parser;
 use cli_prompts::{DisplayPrompt, prompts::Input};
@@ -16,7 +16,7 @@ mod tools;
 #[derive(Parser)]
 struct CliArgs {
     ///Which model to use
-    #[arg(short, long, default_value = "ollama_code")]
+    #[arg(short, long, default_value = "qwen3:8b")]
     pub model: String,
 
     ///Sets the path to operate in.
@@ -83,7 +83,10 @@ async fn repl(args: CliArgs) {
         let mut prompt_text = None;
         if app.show_prompt() {
             let input_prompt = Input::new("Prompt ", |s| Ok(s.to_string()));
-            prompt_text = Some(input_prompt.display().expect("Failed to get input value"));
+            prompt_text = match input_prompt.display() {
+                Ok(val) => Some(val),
+                Err(_) => process::exit(0),
+            }
         }
         match app.repl(prompt_text).await {
             Ok(()) => (),
