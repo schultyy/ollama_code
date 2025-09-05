@@ -22,6 +22,9 @@ struct CliArgs {
     ///Sets the path to operate in.
     #[arg(short, long, default_value = ".")]
     pub path: String,
+    ///Determines whether to display model's thinking output
+    #[arg(short, long, default_value = "false")]
+    pub show_thinking: bool,
 }
 
 #[tokio::main]
@@ -60,9 +63,11 @@ async fn repl(args: CliArgs) {
         while let Some(msg) = stdout_rx.recv().await {
             match msg {
                 app::StdoutMessage::Italic(msg) => {
-                    print!("{}", msg.italic());
-                    use std::io::{self, Write};
-                    io::stdout().flush().unwrap();
+                    if args.show_thinking {
+                        print!("{}", msg.italic());
+                        use std::io::{self, Write};
+                        io::stdout().flush().unwrap();
+                    }
                 }
                 app::StdoutMessage::Inline(msg) => {
                     print!("{}", msg);

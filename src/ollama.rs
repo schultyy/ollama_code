@@ -248,6 +248,7 @@ impl OllamaClient {
                     },
                 ],
                 "stream": true,
+                "think": true
             }))
             .send()
             .await?;
