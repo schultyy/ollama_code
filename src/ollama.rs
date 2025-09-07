@@ -156,6 +156,16 @@ impl OllamaClient {
                         "function": {
                             "name": "list_directory",
                             "description": "Get all files and directories from the current directory",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "The directory path to read"
+                                    }
+                                },
+                                "required": ["path"]
+                            }
                         }
                     },
                     {
@@ -179,13 +189,9 @@ impl OllamaClient {
                 "stream": true,
                 "think": true,
                 "options": {
-                   "temperature": 0.8,
-                   // "num_ctx": 1024,
-                   // "num_batch": 2,
-                   // "num_gpu": 1,
-                   // "main_gpu": 0,
-                   // "use_mmap": true,
-                   // "num_thread": 8
+                   "temperature": 0.4,
+                   "top_p": 0.9,
+                   "repeat_penalty": 1.5
                  }
             }))
             .send()

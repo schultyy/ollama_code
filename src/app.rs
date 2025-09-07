@@ -7,6 +7,7 @@ use tracing::{Level, event, span};
 use crate::{
     constants::ASSISTANT,
     ollama::{self, OllamaClient, OllamaMessage, Role, ToolCall},
+    tools::{Tool, Toolchain},
 };
 
 pub enum AppError {
@@ -196,36 +197,18 @@ impl App {
         Ok(())
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(self))]
     fn dispatch_tool(&self, tool: &ToolCall) -> Result<String, String> {
+        let toolchain = Toolchain::default();
         if tool.function.name == "list_directory" {
             let path = tool
                 .function
                 .arguments
                 .get("path")
-                .map(|p| PathBuf::from(p.to_string()))
-                .unwrap_or_else(|| PathBuf::from("."));
-            let canonical_path = match std::fs::canonicalize(&path) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
-                    return Err(format!(
-                        "File not found or invalid path: {}",
-                        path.display()
-                    ));
-                }
-            };
-            event!(
-                Level::INFO,
-                path = format!(
-                    "{}",
-                    canonical_path
-                        .as_os_str()
-                        .to_str()
-                        .unwrap_or("invalid utf8 path")
-                )
-            );
-            return match crate::tools::list_directory(&canonical_path) {
+                .unwrap_or(&Value::String(".".into()))
+                .to_string();
+
+            return match toolchain.call(Tool::ReadDirectory(path)) {
                 Ok(val) => Ok(val),
                 Err(err) => {
                     tracing::error!("ERR: {}", err);
@@ -237,29 +220,10 @@ impl App {
                 .function
                 .arguments
                 .get("path")
-                .map(|p| PathBuf::from(p.to_string()))
-                .unwrap_or_else(|| PathBuf::from("."));
-            let canonical_path = match std::fs::canonicalize(&path) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::error!("Failed to canonicalize path: {} - {}", path.display(), e);
-                    return Err(format!(
-                        "File not found or invalid path: {}",
-                        path.display()
-                    ));
-                }
-            };
-            event!(
-                Level::INFO,
-                path = format!(
-                    "{}",
-                    canonical_path
-                        .as_os_str()
-                        .to_str()
-                        .unwrap_or("invalid utf8 path")
-                )
-            );
-            return match crate::tools::read_file(&path) {
+                .unwrap_or(&Value::String(".".into()))
+                .to_string();
+
+            return match toolchain.call(Tool::ReadFile(path)) {
                 Ok(val) => Ok(val),
                 Err(err) => {
                     tracing::error!("ERR: {}", err);
