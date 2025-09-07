@@ -9,6 +9,7 @@ use tracing::Level;
 use crate::{app::App, ollama::OllamaClient};
 
 mod app;
+mod constants;
 mod ollama;
 mod otel;
 mod tools;
@@ -79,6 +80,11 @@ async fn repl(args: CliArgs) {
                 }
                 app::StdoutMessage::Error(err) => {
                     eprintln!("{}", err);
+                }
+                app::StdoutMessage::EOF => {
+                    println!("");
+                    use std::io::{self, Write};
+                    io::stdout().flush().unwrap();
                 }
             }
         }

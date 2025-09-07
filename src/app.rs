@@ -1,9 +1,13 @@
-use std::{fmt::Display, path::PathBuf};
+use std::{collections::HashMap, fmt::Display, path::PathBuf};
 
+use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{Level, event, span};
 
-use crate::ollama::{self, OllamaClient, OllamaMessage, ToolCall};
+use crate::{
+    constants::ASSISTANT,
+    ollama::{self, OllamaClient, OllamaMessage, Role, ToolCall},
+};
 
 pub enum AppError {
     SendError(tokio::sync::mpsc::error::SendError<StdoutMessage>),
@@ -29,6 +33,7 @@ pub enum StdoutMessage {
     Inline(String),
     WithNewLine(String),
     Error(String),
+    EOF,
 }
 
 #[derive(Debug)]
@@ -38,6 +43,39 @@ pub struct App {
     client: OllamaClient,
     stdout_tx: Sender<StdoutMessage>,
     rx: Receiver<OllamaMessage>,
+    history: Vec<HashMap<String, Value>>,
+}
+
+fn system_prompt() -> HashMap<String, Value> {
+    let mut map = HashMap::new();
+    map.insert("role".into(), Value::String("system".into()));
+    map.insert(
+        "content".into(),
+        Value::String(crate::constants::SYSTEM_PROMPT.into()),
+    );
+    map
+}
+
+fn user_prompt(prompt_text: &str) -> HashMap<String, Value> {
+    HashMap::from([
+        ("role".into(), Value::String(Role::User.to_string())),
+        ("content".into(), Value::String(prompt_text.to_string())),
+    ])
+}
+
+fn tool_prompt(content: &str, tool_name: &str) -> HashMap<String, Value> {
+    HashMap::from([
+        ("role".into(), Value::String(Role::Tool.to_string())),
+        ("content".into(), Value::String(content.to_string())),
+        ("tool_name".into(), Value::String(tool_name.to_string())),
+    ])
+}
+
+fn add_assistant_response(content: &str) -> HashMap<String, Value> {
+    HashMap::from([
+        ("role".into(), Value::String(ASSISTANT.into())),
+        ("content".into(), Value::String(content.into())),
+    ])
 }
 
 impl App {
@@ -52,6 +90,7 @@ impl App {
             client,
             stdout_tx: stdout_tx,
             rx,
+            history: vec![system_prompt()],
         }
     }
 
@@ -68,8 +107,10 @@ impl App {
             }
 
             let user_prompt_stdout = self.stdout_tx.clone();
+            self.history.push(user_prompt(&prompt.unwrap()));
+            let history = self.history.clone();
             tokio::spawn(async move {
-                if let Err(err) = user_client.user_prompt(&prompt.unwrap()).await {
+                if let Err(err) = user_client.prompt_stream(&history).await {
                     let msg = format!("[ERR] Spawn Prompt Failed.\n[ERR]: {}", err);
                     if let Err(err) = user_prompt_stdout.send(StdoutMessage::Error(msg)).await {
                         panic!("[ERR] Failed to send message in user prompt: {}", err);
@@ -77,6 +118,8 @@ impl App {
                 }
             });
         }
+
+        let mut assistant_response_buffer: String = "".into();
 
         while let Some(response) = self.rx.recv().await {
             match response {
@@ -113,10 +156,10 @@ impl App {
                             self.call_stack += 1;
                             tracing::debug!("Increase Call Stack to {}", self.call_stack);
                             let tool_call_stdout = self.stdout_tx.clone();
+                            self.history.push(tool_prompt(&result, &tool.function.name));
+                            let history = self.history.clone();
                             tokio::spawn(async move {
-                                if let Err(err) =
-                                    client.tool_prompt(&result, &tool.function.name).await
-                                {
+                                if let Err(err) = client.prompt_stream(&history).await {
                                     let msg =
                                         format!("[ERR] Spawn Tool Prompt Failed\n. [ERR]: {}", err);
                                     if let Err(err) =
@@ -133,6 +176,8 @@ impl App {
                     } else if let Some(thinking) = ollama_response.message.thinking {
                         self.stdout_tx.send(StdoutMessage::Italic(thinking)).await?;
                     } else if let Some(response) = ollama_response.message.content {
+                        assistant_response_buffer =
+                            format!("{}{}", assistant_response_buffer, response);
                         self.stdout_tx.send(StdoutMessage::Inline(response)).await?;
                     }
                 }
@@ -140,9 +185,9 @@ impl App {
                     self.call_stack -= 1;
                     if self.call_stack == 0 {
                         self.show_prompt = true;
-                        use std::io::{self, Write};
-                        io::stdout().flush().unwrap();
-                        // client = OllamaClient::new(tx.clone(), &args.model);
+                        self.stdout_tx.send(StdoutMessage::EOF).await?;
+                        self.history
+                            .push(add_assistant_response(&assistant_response_buffer));
                     }
                     break;
                 }
