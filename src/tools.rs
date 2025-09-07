@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    env, fs,
     path::{self, PathBuf},
 };
 
@@ -7,9 +7,10 @@ use std::{
 pub enum Tool {
     ReadDirectory(String),
     ReadFile(String),
+    CurrentDir,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Toolchain;
 
 impl Toolchain {
@@ -26,7 +27,13 @@ impl Toolchain {
                 .normalize_path(&path)
                 .and_then(|p| self.list_directory(&p)),
             Tool::ReadFile(path) => self.normalize_path(&path).and_then(|p| self.read_file(&p)),
+            Tool::CurrentDir => self.pwd(),
         }
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn pwd(&self) -> Result<String, std::io::Error> {
+        env::current_dir().and_then(|path| Ok(path.to_string_lossy().to_string()))
     }
 
     #[tracing::instrument(skip(self))]

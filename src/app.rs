@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, path::PathBuf};
+use std::{collections::HashMap, fmt::Display};
 
 use serde_json::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -35,6 +35,18 @@ pub enum StdoutMessage {
     WithNewLine(String),
     Error(String),
     EOF,
+}
+
+impl Display for StdoutMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StdoutMessage::Italic(msg) => write!(f, "Italic: {}", msg),
+            StdoutMessage::Inline(msg) => write!(f, "Inline: {}", msg),
+            StdoutMessage::WithNewLine(msg) => write!(f, "WitNewLine: {}", msg),
+            StdoutMessage::Error(msg) => write!(f, "ERROR: {}", msg),
+            StdoutMessage::EOF => write!(f, "EOF"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -205,7 +217,10 @@ impl App {
                 .function
                 .arguments
                 .get("path")
+                .or_else(|| tool.function.arguments.get("dir_path"))
                 .unwrap_or(&Value::String(".".into()))
+                .as_str()
+                .unwrap_or(".")
                 .to_string();
 
             return match toolchain.call(Tool::ReadDirectory(path)) {
@@ -220,7 +235,10 @@ impl App {
                 .function
                 .arguments
                 .get("path")
+                .or_else(|| tool.function.arguments.get("file_path"))
                 .unwrap_or(&Value::String(".".into()))
+                .as_str()
+                .unwrap_or(".")
                 .to_string();
 
             return match toolchain.call(Tool::ReadFile(path)) {

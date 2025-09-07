@@ -161,7 +161,7 @@ impl OllamaClient {
                                 "properties": {
                                     "path": {
                                         "type": "string",
-                                        "description": "The directory path to read"
+                                        "description": "The directory path to read. Can be \".\" for the current directory."
                                     }
                                 },
                                 "required": ["path"]
@@ -187,12 +187,14 @@ impl OllamaClient {
                     },
                 ],
                 "stream": true,
-                "think": true,
-                "options": {
-                   "temperature": 0.4,
-                   "top_p": 0.9,
-                   "repeat_penalty": 1.5
-                 }
+                "think": false,
+                // "format": "json",
+                "keep_alive": "10m",
+                // "options": {
+                //    "temperature": 0.9,
+                //    "top_p": 0.9,
+                //    "repeat_penalty": 1.5
+                //  }
             }))
             .send()
             .await?;
@@ -210,13 +212,21 @@ impl OllamaClient {
                 continue;
             }
 
-            let chunk: OllamaResponse = serde_json::from_str(&line)?;
-            let is_done = chunk.done;
-            self.tx.send(OllamaMessage::Chunk(chunk.clone())).await?;
+            match serde_json::from_str::<OllamaResponse>(&line) {
+                Ok(chunk) => {
+                    let is_done = chunk.done;
+                    self.tx.send(OllamaMessage::Chunk(chunk.clone())).await?;
 
-            if is_done {
-                self.tx.send(OllamaMessage::EOF).await?;
-                break;
+                    if is_done {
+                        self.tx.send(OllamaMessage::EOF).await?;
+                        break;
+                    }
+                }
+                Err(err) => {
+                    tracing::error!("LINE: {}", line);
+                    tracing::error!("ERROR: {}", err);
+                    return Err(err.into());
+                }
             }
         }
 

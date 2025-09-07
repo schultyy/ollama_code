@@ -2,13 +2,14 @@ use std::process::{self, exit};
 
 use clap::Parser;
 use cli_prompts::{DisplayPrompt, prompts::Input};
-use color_eyre::{Result, owo_colors::OwoColorize};
-use tokio::sync::mpsc;
+use color_eyre::Result;
+use serde_json::Value;
 use tracing::Level;
 
-use crate::{app::App, ollama::OllamaClient};
+use crate::{app::App, assistant::Assistant, ollama::OllamaClient};
 
 mod app;
+mod assistant;
 mod constants;
 mod ollama;
 mod otel;
@@ -17,7 +18,7 @@ mod tools;
 #[derive(Parser)]
 struct CliArgs {
     ///Which model to use
-    #[arg(short, long, default_value = "qwen3:8b")]
+    #[arg(short, long, default_value = "llama3.1:8b")]
     pub model: String,
 
     ///Sets the path to operate in.
@@ -55,55 +56,33 @@ async fn main() -> Result<()> {
 
 async fn repl(args: CliArgs) {
     println!("Let's get started. Press [ESC] to exit.");
-    let (ollama_tx, ollama_rx) = mpsc::channel(1000);
-    let (stdout_tx, mut stdout_rx) = mpsc::channel(1000);
-    let client = OllamaClient::new(ollama_tx.clone(), &args.model);
-    let mut app = App::new(ollama_rx, stdout_tx.clone(), client);
-
-    tokio::spawn(async move {
-        while let Some(msg) = stdout_rx.recv().await {
-            match msg {
-                app::StdoutMessage::Italic(msg) => {
-                    if args.show_thinking {
-                        print!("{}", msg.italic());
-                        use std::io::{self, Write};
-                        io::stdout().flush().unwrap();
-                    }
-                }
-                app::StdoutMessage::Inline(msg) => {
-                    print!("{}", msg);
-                    use std::io::{self, Write};
-                    io::stdout().flush().unwrap();
-                }
-                app::StdoutMessage::WithNewLine(msg) => {
-                    println!("{}", msg);
-                }
-                app::StdoutMessage::Error(err) => {
-                    eprintln!("{}", err);
-                }
-                app::StdoutMessage::EOF => {
-                    println!("");
-                    use std::io::{self, Write};
-                    io::stdout().flush().unwrap();
-                }
-            }
-        }
-    });
+    let mut assistant = Assistant::new(args.model)
+        .with_progress_callback(Box::new(|msg| {
+            println!("{}", msg);
+        }));
 
     loop {
-        let mut prompt_text = None;
-        if app.show_prompt() {
-            let input_prompt = Input::new("Prompt ", |s| Ok(s.to_string()));
-            prompt_text = match input_prompt.display() {
-                Ok(val) => Some(val),
-                Err(_) => process::exit(0),
+        let input_prompt = Input::new("Prompt ", |s| Ok(s.to_string()));
+        let question = match input_prompt.display() {
+            Ok(val) => val,
+            Err(_) => process::exit(0),
+        };
+
+        match assistant.ask(&question).await {
+            Ok(response) => {
+                // Try to parse as JSON first, fallback to plain text
+                if let Ok(json_val) = serde_json::from_str::<Value>(&response) {
+                    if let Some(content) = json_val.get("content").and_then(|c| c.as_str()) {
+                        println!("\n{}\n", content);
+                    } else {
+                        println!("\n{}\n", response);
+                    }
+                } else {
+                    // Plain text response
+                    println!("\n{}\n", response);
+                }
             }
-        }
-        match app.repl(prompt_text).await {
-            Ok(()) => (),
-            Err(err) => {
-                eprintln!("[ERR]: {}", err);
-            }
+            Err(err) => eprintln!("[ERR]: {:?}", err),
         }
     }
 }
