@@ -175,6 +175,27 @@ impl Assistant {
                             "name": "pwd",
                             "description": "Returns the full path of the current directory"
                         }
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "grep",
+                            "description": "Searches for a specific substring in a designated file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "The file to grep through"
+                                    },
+                                    "search_pattern": {
+                                        "type": "string",
+                                        "description": "The search pattern"
+                                    }
+                                },
+                                "required": ["path", "search_pattern"]
+                            }
+                        }
                     }
                 ],
                 "stream": false,  // Key change: no streaming
@@ -266,6 +287,34 @@ impl Assistant {
                         .map_err(|e| AssistantError::ToolError(e.to_string()))?;
                     if let Some(ref callback) = self.progress_callback {
                         callback(&format!("   Current directory: {}", result.trim()));
+                    }
+                    result
+                }
+                "grep" => {
+                    let path = args["path"].as_str().ok_or_else(|| {
+                        AssistantError::ToolError("Missing Grep Parameter 'path'".into())
+                    })?;
+                    let search_pattern = args["search_pattern"].as_str().ok_or_else(|| {
+                        AssistantError::ToolError("Missing Grep Parameter 'search_pattern'".into())
+                    })?;
+
+                    if let Some(ref callback) = self.progress_callback {
+                        callback(&format!(
+                            "🔍 Searching for '{}' in {}",
+                            search_pattern, path
+                        ));
+                    }
+
+                    let result = self
+                        .toolchain
+                        .call(Tool::Grep {
+                            search_string: search_pattern.into(),
+                            path: path.into(),
+                        })
+                        .map_err(|e| AssistantError::ToolError(e.to_string()))?;
+
+                    if let Some(ref callback) = self.progress_callback {
+                        callback(&format!("   Search completed"));
                     }
                     result
                 }

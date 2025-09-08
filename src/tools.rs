@@ -1,5 +1,7 @@
 use std::{
-    env, fs,
+    env,
+    fs::{self, File},
+    io::{BufRead, BufReader},
     path::{self, PathBuf},
 };
 
@@ -8,6 +10,7 @@ pub enum Tool {
     ReadDirectory(String),
     ReadFile(String),
     CurrentDir,
+    Grep { search_string: String, path: String },
 }
 
 #[derive(Default, Debug)]
@@ -28,6 +31,48 @@ impl Toolchain {
                 .and_then(|p| self.list_directory(&p)),
             Tool::ReadFile(path) => self.normalize_path(&path).and_then(|p| self.read_file(&p)),
             Tool::CurrentDir => self.pwd(),
+            Tool::Grep {
+                search_string,
+                path,
+            } => {
+                let result = self
+                    .normalize_path(&path)
+                    .and_then(|p| self.grep_streaming(&search_string, &p))?;
+                Ok(result)
+            }
+        }
+    }
+
+    fn grep_streaming(
+        &self,
+        search_string: &str,
+        path: &PathBuf,
+    ) -> Result<String, std::io::Error> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut matches = Vec::new();
+        let mut total_lines = 0;
+
+        for (line_num, line_result) in reader.lines().enumerate() {
+            let line = line_result?;
+            total_lines += 1;
+
+            if line.contains(search_string) {
+                matches.push(format!("{}:{}", line_num + 1, line));
+            }
+        }
+
+        if matches.is_empty() {
+            Ok(format!(
+                "No matches found for '{}' in {} lines",
+                search_string, total_lines
+            ))
+        } else {
+            Ok(format!(
+                "Found {} matches:\n{}",
+                matches.len(),
+                matches.join("\n")
+            ))
         }
     }
 
