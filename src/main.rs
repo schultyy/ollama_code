@@ -22,9 +22,6 @@ struct CliArgs {
     ///Sets the path to operate in.
     #[arg(short, long, default_value = ".")]
     pub path: String,
-    ///Determines whether to display model's thinking output
-    #[arg(short, long, default_value = "false")]
-    pub show_thinking: bool,
 }
 
 #[tokio::main]
