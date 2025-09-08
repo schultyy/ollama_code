@@ -6,9 +6,7 @@ use color_eyre::Result;
 use serde_json::Value;
 use tracing::Level;
 
-use crate::{app::App, assistant::Assistant, ollama::OllamaClient};
-
-mod app;
+use crate::assistant::Assistant;
 mod assistant;
 mod constants;
 mod ollama;
@@ -56,10 +54,9 @@ async fn main() -> Result<()> {
 
 async fn repl(args: CliArgs) {
     println!("Let's get started. Press [ESC] to exit.");
-    let mut assistant = Assistant::new(args.model)
-        .with_progress_callback(Box::new(|msg| {
-            println!("{}", msg);
-        }));
+    let mut assistant = Assistant::new(args.model).with_progress_callback(Box::new(|msg| {
+        println!("{}", msg);
+    }));
 
     loop {
         let input_prompt = Input::new("Prompt ", |s| Ok(s.to_string()));
@@ -82,7 +79,7 @@ async fn repl(args: CliArgs) {
                     println!("\n{}\n", response);
                 }
             }
-            Err(err) => eprintln!("[ERR]: {:?}", err),
+            Err(err) => eprintln!("[ERR]: {}", err),
         }
     }
 }

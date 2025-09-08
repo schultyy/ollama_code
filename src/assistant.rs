@@ -1,7 +1,10 @@
-use crate::tools::{Tool, Toolchain};
+use crate::{
+    constants::{ASSISTANT, CONTENT, ROLE, SYSTEM, SYSTEM_PROMPT, TOOL_CALLS, USER},
+    tools::{Tool, Toolchain},
+};
 use reqwest;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display};
 
 pub type ProgressCallback = Box<dyn Fn(&str) + Send + Sync>;
 
@@ -10,6 +13,16 @@ pub enum AssistantError {
     RequestError(reqwest::Error),
     JsonError(serde_json::Error),
     ToolError(String),
+}
+
+impl Display for AssistantError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssistantError::RequestError(error) => write!(f, "{}", error),
+            AssistantError::JsonError(error) => write!(f, "{}", error),
+            AssistantError::ToolError(error) => write!(f, "{}", error),
+        }
+    }
 }
 
 impl From<reqwest::Error> for AssistantError {
@@ -49,32 +62,8 @@ impl Assistant {
 
         // Add system message
         conversation.push(HashMap::from([
-            ("role".into(), Value::String("system".into())),
-            ("content".into(), Value::String(
-                "You are a coding assistant. Help developers by exploring their codebase.
-
-MANDATORY WORKFLOW:
-1. Call pwd to see current directory
-2. Call list_directory to see files
-3. Read relevant files
-4. Provide answer
-
-EXACT JSON FORMAT REQUIRED:
-
-Step 1 - Get current directory:
-{\"tool_calls\": [{\"function\": {\"name\": \"pwd\"}}]}
-
-Step 2 - List directory:
-{\"tool_calls\": [{\"function\": {\"name\": \"list_directory\", \"arguments\": {\"path\": \".\"}}}]}
-
-Step 3 - Read file:
-{\"tool_calls\": [{\"function\": {\"name\": \"read_file\", \"arguments\": {\"path\": \"filename.ext\"}}}]}
-
-Step 4 - Final answer:
-{\"content\": \"your answer here\"}
-
-CRITICAL: Use \"arguments\" not \"parameters\". Follow this exact JSON structure.".into()
-            )),
+            (ROLE.into(), Value::String(SYSTEM.into())),
+            (CONTENT.into(), Value::String(SYSTEM_PROMPT.to_string())),
         ]));
 
         Self {
@@ -95,8 +84,8 @@ CRITICAL: Use \"arguments\" not \"parameters\". Follow this exact JSON structure
     pub async fn ask(&mut self, question: &str) -> Result<String, AssistantError> {
         // Add user message
         self.conversation.push(HashMap::from([
-            ("role".into(), Value::String("user".into())),
-            ("content".into(), Value::String(question.to_string())),
+            (ROLE.into(), Value::String(USER.into())),
+            (CONTENT.into(), Value::String(question.to_string())),
         ]));
 
         // Process until we get a final answer (with safety limit)
@@ -104,28 +93,28 @@ CRITICAL: Use \"arguments\" not \"parameters\". Follow this exact JSON structure
         loop {
             loop_count += 1;
             if loop_count > 10 {
-                return Err(AssistantError::ToolError("Too many iterations, model not providing final answer".into()));
+                return Err(AssistantError::ToolError(
+                    "Too many iterations, model not providing final answer".into(),
+                ));
             }
-            // println!("BEFORE GET_MODEL_RESPONSE");
-            // println!("{:?}", self.conversation);
             let response = self.get_model_response().await?;
 
-            if let Some(tool_calls) = response.get("tool_calls") {
+            if let Some(tool_calls) = response.get(TOOL_CALLS) {
                 // Add the assistant's tool call message to conversation
                 self.conversation.push(HashMap::from([
-                    ("role".into(), Value::String("assistant".into())),
-                    ("tool_calls".into(), tool_calls.clone()),
+                    (ROLE.into(), Value::String(ASSISTANT.into())),
+                    (TOOL_CALLS.into(), tool_calls.clone()),
                 ]));
-                
+
                 // Execute tools and add results
                 self.execute_tools(tool_calls).await?;
                 // Continue loop to get model's response to tool results
                 continue;
-            } else if let Some(content) = response.get("content") {
+            } else if let Some(content) = response.get(CONTENT) {
                 // Got final answer
                 self.conversation.push(HashMap::from([
-                    ("role".into(), Value::String("assistant".into())),
-                    ("content".into(), content.clone()),
+                    (ROLE.into(), Value::String(ASSISTANT.into())),
+                    (CONTENT.into(), content.clone()),
                 ]));
                 return Ok(content.as_str().unwrap_or("").to_string());
             } else {
@@ -232,7 +221,8 @@ CRITICAL: Use \"arguments\" not \"parameters\". Follow this exact JSON structure
                     if let Some(ref callback) = self.progress_callback {
                         callback(&format!("📁 Listing directory: {}", path));
                     }
-                    let result = self.toolchain
+                    let result = self
+                        .toolchain
                         .call(Tool::ReadDirectory(path.to_string()))
                         .map_err(|e| {
                             AssistantError::ToolError(format!(
@@ -251,7 +241,8 @@ CRITICAL: Use \"arguments\" not \"parameters\". Follow this exact JSON structure
                     if let Some(ref callback) = self.progress_callback {
                         callback(&format!("📄 Reading file: {}", path));
                     }
-                    let result = self.toolchain
+                    let result = self
+                        .toolchain
                         .call(Tool::ReadFile(path.to_string()))
                         .map_err(|e| {
                             AssistantError::ToolError(format!(
