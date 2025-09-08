@@ -3,6 +3,10 @@
 name = "ollama_code"
 version = "0.1.0"
 edition = "2024"
+description = "Coding assistant with an ollama backend"
+license = "MIT"
+homepage = "https://github.com/schultyy/ollama_code"
+repository = "https://github.com/schultyy/ollama_code"
 
 [dependencies]
 clap = { version = "4.5.46", features = ["derive"] }
