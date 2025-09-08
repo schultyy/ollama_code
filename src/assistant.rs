@@ -243,53 +243,62 @@ impl Assistant {
                     if let Some(ref callback) = self.progress_callback {
                         callback(&format!("📁 Listing directory: {}", path));
                     }
-                    let result = self
-                        .toolchain
-                        .call(Tool::ReadDirectory(path.to_string()))
-                        .map_err(|e| {
-                            AssistantError::ToolError(format!(
-                                "Path: {} - Error: {}",
-                                path,
-                                e.to_string()
-                            ))
-                        })?;
-                    if let Some(ref callback) = self.progress_callback {
-                        callback(&format!("   Found {} items", result.lines().count()));
+                    match self.toolchain.call(Tool::ReadDirectory(path.to_string())) {
+                        Ok(result) => {
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   Found {} items", result.lines().count()));
+                            }
+                            result
+                        }
+                        Err(e) => {
+                            let error_msg = format!("ERROR: Could not list directory '{}' - {}", path, e);
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   ❌ {}", error_msg));
+                            }
+                            error_msg
+                        }
                     }
-                    result
                 }
                 "read_file" => {
                     let path = args["path"].as_str().unwrap_or(".");
                     if let Some(ref callback) = self.progress_callback {
                         callback(&format!("📄 Reading file: {}", path));
                     }
-                    let result = self
-                        .toolchain
-                        .call(Tool::ReadFile(path.to_string()))
-                        .map_err(|e| {
-                            AssistantError::ToolError(format!(
-                                "Path: {} - Error: {}",
-                                path,
-                                e.to_string()
-                            ))
-                        })?;
-                    if let Some(ref callback) = self.progress_callback {
-                        callback(&format!("   Read {} characters", result.len()));
+                    match self.toolchain.call(Tool::ReadFile(path.to_string())) {
+                        Ok(result) => {
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   Read {} characters", result.len()));
+                            }
+                            result
+                        }
+                        Err(e) => {
+                            let error_msg = format!("ERROR: Could not read file '{}' - {}", path, e);
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   ❌ {}", error_msg));
+                            }
+                            error_msg
+                        }
                     }
-                    result
                 }
                 "pwd" => {
                     if let Some(ref callback) = self.progress_callback {
                         callback("📍 Getting current directory...");
                     }
-                    let result = self
-                        .toolchain
-                        .call(Tool::CurrentDir)
-                        .map_err(|e| AssistantError::ToolError(e.to_string()))?;
-                    if let Some(ref callback) = self.progress_callback {
-                        callback(&format!("   Current directory: {}", result.trim()));
+                    match self.toolchain.call(Tool::CurrentDir) {
+                        Ok(result) => {
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   Current directory: {}", result.trim()));
+                            }
+                            result
+                        }
+                        Err(e) => {
+                            let error_msg = format!("ERROR: Could not get current directory - {}", e);
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   ❌ {}", error_msg));
+                            }
+                            error_msg
+                        }
                     }
-                    result
                 }
                 "grep" => {
                     let path = args["path"].as_str().ok_or_else(|| {
@@ -306,18 +315,24 @@ impl Assistant {
                         ));
                     }
 
-                    let result = self
-                        .toolchain
-                        .call(Tool::Grep {
-                            search_string: search_pattern.into(),
-                            path: path.into(),
-                        })
-                        .map_err(|e| AssistantError::ToolError(e.to_string()))?;
-
-                    if let Some(ref callback) = self.progress_callback {
-                        callback(&format!("   Search completed"));
+                    match self.toolchain.call(Tool::Grep {
+                        search_string: search_pattern.into(),
+                        path: path.into(),
+                    }) {
+                        Ok(result) => {
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   Search completed"));
+                            }
+                            result
+                        }
+                        Err(e) => {
+                            let error_msg = format!("ERROR: Could not search in file '{}' - {}", path, e);
+                            if let Some(ref callback) = self.progress_callback {
+                                callback(&format!("   ❌ {}", error_msg));
+                            }
+                            error_msg
+                        }
                     }
-                    result
                 }
                 _ => return Err(AssistantError::ToolError(format!("Unknown tool: {}", name))),
             };
