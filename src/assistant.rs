@@ -201,7 +201,8 @@ impl Assistant {
                 "stream": false,  // Key change: no streaming
                 "format": "json",
                 "options": {
-                    "temperature": 0.5
+                    "temperature": 0.5,
+                    "num_ctx": 32768  // Use much larger context window
                 }
             }))
             .send()
